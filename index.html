@@ -1300,7 +1300,7 @@ function applyFilters() {
           curLabel = loadLabel(); if (!curLabel) { curLabel = nextLabel(); saveLabel(curLabel); }
           if (!isFirst) {
             const rem = fmtRemaining(saved.remaining);
-            pushLog('restored', 'Session restored', `Set ${curLabel} · ${curFeatured.length} studies · ${rem}`);
+            pushLog('restored', 'Session restored', `Set ${curLabel} · ids [${curFeatured.map(s => s.id).join(', ')}] · ${rem}`);
             updateSessBar('restored', 'Session restored', `Set ${curLabel} · ${rem}`);
             toast('✓ Same featured studies', `Set ${curLabel} from ${fmtAge(saved.age)} is still active. ${rem}.`, 'restored');
           }
@@ -1317,7 +1317,7 @@ function applyFilters() {
         curLabel = nextLabel(); saveLabel(curLabel);
         saveSession(curFeatured.map(s => s.id));
         if (!isFirst) {
-          pushLog('expired', '48h expired', `New Set ${curLabel} · ${curFeatured.length} featured selected`);
+          pushLog('expired', '48h expired', `New Set ${curLabel} · ids [${curFeatured.map(s => s.id).join(', ')}]`);
           updateSessBar('expired', '48h session expired', `New Set ${curLabel} · ${curFeatured.length} featured`);
           toast('↻ Featured studies refreshed', `It has been more than 48 hours since your last visit. A fresh set (Set ${curLabel}) of ${curFeatured.length} featured studies has been selected.`, 'expired');
         }
@@ -1328,7 +1328,7 @@ function applyFilters() {
         curLabel = nextLabel(); saveLabel(curLabel);
         saveSession(curFeatured.map(s => s.id));
         if (!isFirst) {
-          pushLog('new', 'New session', `Set ${curLabel} · ${curFeatured.length} featured · locked for 48h`);
+          pushLog('new', 'New session', `Set ${curLabel} · ids [${curFeatured.map(s => s.id).join(', ')}] · locked 48h`);
           updateSessBar('new', 'New session started', `Set ${curLabel} · ${curFeatured.length} featured locked for 48h`);
           toast('Featured studies selected', `Set ${curLabel}: ${curFeatured.length} featured studies selected and locked for 48 hours.`, 'new');
         }
@@ -1352,7 +1352,7 @@ function applyFilters() {
       featExpanded = false;
       ctxKey = newKey;
       if (!isFirst) {
-        pushLog('filtered', label, `Set ${curLabel} · ${curFiltered.length} of ${featPool.length} matching featured shown`);
+        pushLog('filtered', label, `Set ${curLabel} · ids [${curFiltered.map(s => s.id).join(', ')}] · ${curFiltered.length} of ${featPool.length} match`);
         updateSessBar('filtered', label, `Set ${curLabel} · ${curFiltered.length} of ${featPool.length} featured pinned`);
       }
     } else {
@@ -1425,8 +1425,8 @@ function applyFilters() {
   const piEl = document.getElementById('pagInfo'); if(piEl) piEl.innerHTML = `<strong>1</strong> to <strong>${Math.min(displayTotal,10)}</strong> of <strong>${displayTotal} Studies</strong>`;
   const lpEl = document.getElementById('lastPg'); if(lpEl) lpEl.textContent = Math.max(1, Math.ceil(displayTotal / 10));
 
-  // ── ROTATION NOTICE + TOGGLE BUTTON ────────────────────────────────────────
-  // Hidden entirely when there are no featured studies to show
+  // ── TOGGLE BUTTON ONLY ──────────────────────────────────────────────────────
+  // Notice/label removed — just the "View all featured studies" toggle, right-aligned.
   let rotationNotice = '';
   if (visibleFeatured.length > 0) {
     let toggleBtn = '';
@@ -1435,15 +1435,9 @@ function applyFilters() {
     } else if (featExpanded && featPool.length > baseShown.length) {
       toggleBtn = `<button class="feat-see-all" onclick="toggleFeatured()">Show fewer</button>`;
     }
-    rotationNotice = `
-    <div class="feat-hdr">
-      <div class="set-pill" title="Every distinct set of featured studies gets a label. ${defState ? 'This is the default 48h-locked set.' : 'This set is tied to the current search context.'}">Set ${curLabel}</div>
-      <div class="feat-notice">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4C7.58 4 4 7.58 4 12S7.58 20 12 20C15.73 20 18.84 17.45 19.73 14H17.65C16.83 16.33 14.61 18 12 18C8.69 18 6 15.31 6 12S8.69 6 12 6C13.66 6 15.14 6.69 16.22 7.78L13 11H20V4L17.65 6.35Z" fill="currentColor"/></svg>
-        Up to 5 featured studies are chosen from our sponsor pool. You'll see the same set for up to 48 hours; it refreshes when you search or filter.
-      </div>
-      ${toggleBtn}
-    </div>`;
+    if (toggleBtn) {
+      rotationNotice = `<div style="display:flex;justify-content:flex-end;margin-bottom:10px">${toggleBtn}</div>`;
+    }
   }
 
   // ── BUILD HTML ──────────────────────────────────────────────────────────────
