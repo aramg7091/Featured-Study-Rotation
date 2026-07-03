@@ -177,6 +177,11 @@ body{font-family:'Noto Sans',system-ui,sans-serif;background:var(--gray-bg);colo
 .fp-badge svg{width:13px;height:13px}
 .fp-badge svg path{fill:#fff!important}
 
+/* Session/set tag on featured cards (dev/demo aid) */
+.sess-tag{position:absolute;top:12px;left:12px;display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;background:#f5f3ff;border:1px solid #ddd6fe;color:#6d28d9;font-size:10.5px;font-weight:700;letter-spacing:.02em;font-family:'Noto Sans',system-ui,sans-serif;z-index:2}
+.sess-tag .st-id{color:#9ca3af;font-weight:600}
+.card.featured-card{padding-top:40px !important}
+
 /* Badges row */
 .badges{display:flex;flex-wrap:wrap;gap:6px;padding-right:100px}
 .card.featured-card .badges{gap:10px;padding-right:108px;margin-bottom:10px}
@@ -238,6 +243,7 @@ body{font-family:'Noto Sans',system-ui,sans-serif;background:var(--gray-bg);colo
 .feat-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:7px 12px}
 .feat-notice{display:flex;align-items:center;gap:6px;font-size:11px;color:#6b7280;line-height:1.4;flex:1}
 .feat-notice svg{flex-shrink:0;opacity:.6}
+.set-pill{flex-shrink:0;display:inline-flex;align-items:center;padding:4px 10px;border-radius:6px;background:#ede9fe;border:1px solid #ddd6fe;color:#6d28d9;font-size:12px;font-weight:700;letter-spacing:.02em}
 .feat-see-all{font-size:12px;font-weight:600;color:#003CA5;background:#fff;border:1px solid #bfdbfe;border-radius:6px;padding:4px 12px;cursor:pointer;white-space:nowrap;transition:background .15s;font-family:inherit;flex-shrink:0}
 .feat-see-all:hover{background:#eff6ff}
 
@@ -313,6 +319,19 @@ body{font-family:'Noto Sans',system-ui,sans-serif;background:var(--gray-bg);colo
 .fab-log-badge.s{background:#f0fdf4;color:#16a34a}
 .fab-log-txt{color:#374151;flex:1}
 .fab-dbg{background:#eff6ff;border-radius:6px;padding:6px 10px;font-size:10px;color:#1d4ed8;margin-bottom:8px;line-height:1.8}
+
+/* Fairness simulator */
+.sim-cols{display:flex;gap:12px}
+.sim-col{flex:1;min-width:0}
+.sim-col h5{font-size:10px;margin:0 0 6px;display:flex;align-items:center;gap:5px}
+.sim-badge{font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px}
+.sim-row{display:flex;align-items:center;gap:6px;margin-bottom:3px;font-size:10px}
+.sim-id{width:26px;color:#6b7280;flex-shrink:0}
+.sim-bar-wrap{flex:1;background:#f3f4f6;border-radius:3px;height:12px;overflow:hidden}
+.sim-bar{height:100%;border-radius:3px;transition:width .4s ease}
+.sim-cnt{width:26px;text-align:right;color:#374151;font-weight:600;flex-shrink:0}
+.sim-stat{font-size:10px;margin-top:6px;padding:5px 8px;border-radius:6px;line-height:1.5}
+.sim-in{width:60px;padding:3px 6px;border:1px solid #d1d5db;border-radius:6px;font-size:11px;font-family:inherit}
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -827,13 +846,20 @@ input,button,select,textarea{font-family:'Noto Sans',system-ui,sans-serif!import
 //  reopen tab, come back the next day — they see the same featured studies.
 //  After 48 hours the selection silently resets on next visit.
 //
+//  PER-VISITOR: the selection is made in the visitor's own browser (Math.random +
+//  localStorage). It is NOT coordinated across users or devices — different people
+//  generally see a different random set of featured studies, and the same person on
+//  a second device/browser sees a different set too.
+//
 //  DEFAULT STATE (no search, no filters):
-//    • First visit → 5 featured studies randomly selected, saved to localStorage with timestamp
+//    • First visit → up to 5 featured studies randomly selected, saved to localStorage with timestamp
 //    • Any return within 48h → exact same selection restored, always
 //    • After 48h → old selection cleared, new random selection made
 //
 //  FILTERED STATE (any search or filter active):
-//    • Show ALL featured studies that match — no 5-study cap
+//    • Show up to 5 matching featured studies — same 5-study cap as default
+//    • The 5 are locked to the current search context: pagination, sort and scroll do NOT reshuffle
+//    • Change the query or a filter → a new set of up to 5 is picked
 //    • Stored default selection untouched in localStorage
 //    • Returning to default → restore session-locked selection (no reset)
 //
@@ -878,9 +904,13 @@ const STUDIES = [
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours in milliseconds
 const KEY_IDS = 'wt_feat_ids';
 const KEY_TS  = 'wt_feat_ts';
+const KEY_LABEL   = 'wt_feat_label';   // human label of the default 48h session (e.g. "A")
+const KEY_COUNTER = 'wt_sess_counter'; // global counter used to mint new set labels
 
 // ── IN-MEMORY STATE ───────────────────────────────────────────────────────────
-let curFeatured = [];  // current session-locked selection (study objects)
+let curFeatured = [];  // current 48h session-locked selection for DEFAULT state (study objects)
+let curFiltered = [];  // current selection for FILTERED state — capped at 5, stable per search context
+let curLabel   = '';   // human-readable label of the currently displayed set (e.g. "A", "B")
 let featExpanded = false; // whether user has clicked 'see all featured'
 let featVisible  = true;  // whether featured section is shown at all
 let ctxKey      = '';  // last rendered context key (for change detection)
@@ -934,7 +964,23 @@ function tog(id) {
 
 // ── SESSION STORAGE ───────────────────────────────────────────────────────────
 // In-memory fallback for sandboxed/incognito environments
-var _memIds = null, _memTs = null;
+var _memIds = null, _memTs = null, _memLabel = null, _memCounter = 0;
+
+// ── SESSION LABELS (dev/demo aid) ──────────────────────────────────────────────
+// Every distinct set of featured studies gets a short label: A, B, C … Z, AA, AB…
+// The DEFAULT 48h session keeps its label across reloads; each new filtered search
+// context mints a fresh label so developers can tell one set apart from another.
+function numToLabel(n) { let s = ''; while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); } return s; }
+function nextLabel() {
+  let n = _memCounter;
+  try { const raw = localStorage.getItem(KEY_COUNTER); if (raw != null) n = parseInt(raw); } catch (e) {}
+  n = (n || 0) + 1;
+  _memCounter = n;
+  _lsSet(KEY_COUNTER, String(n));
+  return numToLabel(n);
+}
+function saveLabel(l) { _memLabel = l; _lsSet(KEY_LABEL, l); }
+function loadLabel()  { return _lsGet(KEY_LABEL) || _memLabel; }
 
 function _lsSet(k, v) { try { localStorage.setItem(k, v); } catch(e) {} }
 function _lsGet(k)    { try { return localStorage.getItem(k); } catch(e) { return null; } }
@@ -1094,7 +1140,7 @@ function toggleSessDef() {
 // ── DEMO CONTROLS ─────────────────────────────────────────────────────────────
 function forceNewSession() {
   // Clear storage and in-memory state — simulates 48h expiry for demo
-  _lsDel(KEY_IDS); _lsDel(KEY_TS); _memIds = null; _memTs = null;
+  _lsDel(KEY_IDS); _lsDel(KEY_TS); _lsDel(KEY_LABEL); _memIds = null; _memTs = null; _memLabel = null;
   curFeatured = [];
   featExpanded = false;
   ctxKey = '';
@@ -1103,6 +1149,42 @@ function forceNewSession() {
   document.querySelectorAll('.fp input[type=checkbox]').forEach(x => x.checked = false);
   document.querySelectorAll('.fp input[type=radio]').forEach(x => x.checked = x.value === 'all');
   applyFilters();
+}
+
+// ── FAIRNESS SIMULATOR ────────────────────────────────────────────────────────
+// Compares the CURRENT client-side random pick against a BALANCED server-side
+// rotation (each user is served the least-shown studies), over N simulated users.
+function runFairnessSim() {
+  const pool = STUDIES.filter(s => s.featured).map(s => s.id);
+  const show = Math.min(5, pool.length);
+  let N = parseInt(document.getElementById('simN').value) || 0;
+  N = Math.max(1, Math.min(N, 100000));
+
+  // Strategy 1 — RANDOM (what the prototype does today): each user shuffles & takes 5
+  const rand = {}; pool.forEach(id => rand[id] = 0);
+  for (let u = 0; u < N; u++) shuffle(pool).slice(0, show).forEach(id => rand[id]++);
+
+  // Strategy 2 — BALANCED (server-side rotation): each user gets the least-shown 5
+  const bal = {}; pool.forEach(id => bal[id] = 0);
+  for (let u = 0; u < N; u++) {
+    [...pool].sort((a, b) => (bal[a] - bal[b]) || (a - b)).slice(0, show).forEach(id => bal[id]++);
+  }
+
+  const ideal = (N * show / pool.length).toFixed(1);
+  document.getElementById('simOut').innerHTML =
+    `<div class="sim-cols">${simCol('Random (current)', '#f43f5e', rand, pool)}${simCol('Balanced (server-side)', '#16a34a', bal, pool)}</div>` +
+    `<div style="font-size:10px;color:#6b7280;margin-top:8px">${N} users × ${show} shown = <strong>${N * show}</strong> impressions across ${pool.length} studies · ideal = <strong>${ideal}</strong> each. Balanced keeps every study within 1 of the others; random drifts far apart.</div>`;
+}
+function simCol(title, color, counts, pool) {
+  const vals = pool.map(id => counts[id]);
+  const max = Math.max(...vals), min = Math.min(...vals), spread = max - min;
+  const rows = pool.map(id => {
+    const w = max ? Math.round(counts[id] / max * 100) : 0;
+    return `<div class="sim-row"><span class="sim-id">#${id}</span><span class="sim-bar-wrap"><span class="sim-bar" style="width:${w}%;background:${color}"></span></span><span class="sim-cnt">${counts[id]}</span></div>`;
+  }).join('');
+  const even = spread <= 1;
+  const stat = even ? `spread ${spread} — near-equal ✓` : `spread ${spread} — uneven`;
+  return `<div class="sim-col"><h5><span class="sim-badge" style="background:${color}22;color:${color}">${title}</span></h5>${rows}<div class="sim-stat" style="background:${even ? '#f0fdf4' : '#fef2f2'};color:${even ? '#15803d' : '#b91c1c'}">min ${min} · max ${max} · <strong>${stat}</strong></div></div>`;
 }
 
 function simulateExpiry() {
@@ -1134,14 +1216,18 @@ const COND_ICON = `<svg width="13" height="13" viewBox="0 0 20 21" fill="none"><
 const AGE_ICON = `<svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M7.51 8.96C5.55 8.96 3.97 7.37 3.97 5.42C3.97 3.46 5.55 1.88 7.51 1.88C9.46 1.88 11.05 3.46 11.05 5.42C11.05 7.37 9.46 8.96 7.51 8.96ZM10.83 18.13H4.17C2.15 18.13 1.04 17.02 1.04 15.02C1.04 12.8 2.3 10.21 5.83 10.21H9.17C12.7 10.21 13.96 12.8 13.96 15.02C13.96 17.02 12.85 18.13 10.83 18.13Z" fill="#525B6C"/></svg>`;
 const MORE_CHV = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12.72 15.78C12.58 15.92 12.39 16 12.19 16H11.81L6.15 10.64C5.9 10.38 5.9 9.96 6.15 9.7L6.86 9L12 13.67L17.14 9L17.85 9.93C18.1 10.19 18.1 10.61 17.85 10.87L12.72 15.78Z" fill="currentColor"/></svg>`;
 
-function cardHTML(s, isFt) {
+function cardHTML(s, isFt, ftMeta) {
   const sc = SCLS[s.status] || 'bac';
   const tc = TCLS[s.type]   || 'bo';
   const ageMin = s.minAge === 0 ? '0' : s.minAge;
   const ageMax = s.maxAge === 999 ? 'Years and older' : `to ${s.maxAge} Years`;
   // Show all conditions as tags
   const condTags = s.conditions.map(c => `<div class="ctag">${c}</div>`).join('');
+  const sessTag = (isFt && ftMeta && ftMeta.label)
+    ? `<div class="sess-tag" title="Featured set ${ftMeta.label} · position ${ftMeta.idx} · study id ${s.id}">Set ${ftMeta.label} · #${ftMeta.idx}<span class="st-id">· id ${s.id}</span></div>`
+    : '';
   return `<div class="card ${isFt ? 'featured-card' : 'normal'}">
+    ${sessTag}
     ${isFt ? FP_BADGE : ''}
     <div class="badges">
       <div class="badge ${sc}">${dot(s.status)}${s.status}</div>
@@ -1211,36 +1297,40 @@ function applyFilters() {
         const restored = saved.ids.map(id => STUDIES.find(s => s.id === id)).filter(Boolean);
         if (restored.length > 0) {
           curFeatured = restored;
+          curLabel = loadLabel(); if (!curLabel) { curLabel = nextLabel(); saveLabel(curLabel); }
           if (!isFirst) {
             const rem = fmtRemaining(saved.remaining);
-            pushLog('restored', 'Session restored', `${curFeatured.length} studies · ${rem}`);
-            updateSessBar('restored', 'Session restored', `Same selection · ${rem}`);
-            toast('✓ Same featured studies', `Your selection from ${fmtAge(saved.age)} is still active. ${rem}.`, 'restored');
+            pushLog('restored', 'Session restored', `Set ${curLabel} · ${curFeatured.length} studies · ${rem}`);
+            updateSessBar('restored', 'Session restored', `Set ${curLabel} · ${rem}`);
+            toast('✓ Same featured studies', `Set ${curLabel} from ${fmtAge(saved.age)} is still active. ${rem}.`, 'restored');
           }
         } else {
           // Stored IDs no longer in pool — pick fresh silently
           curFeatured = pick(featPool);
+          curLabel = nextLabel(); saveLabel(curLabel);
           saveSession(curFeatured.map(s => s.id));
         }
 
       } else if (saved && saved.expired) {
         // 48h elapsed — pick a completely new selection
         curFeatured = pick(featPool);
+        curLabel = nextLabel(); saveLabel(curLabel);
         saveSession(curFeatured.map(s => s.id));
         if (!isFirst) {
-          pushLog('expired', '48h expired', `New ${curFeatured.length} featured selected`);
-          updateSessBar('expired', '48h session expired', `New ${curFeatured.length} featured selected`);
-          toast('↻ Featured studies refreshed', `It has been more than 48 hours since your last visit. A fresh set of ${curFeatured.length} featured studies has been selected.`, 'expired');
+          pushLog('expired', '48h expired', `New Set ${curLabel} · ${curFeatured.length} featured selected`);
+          updateSessBar('expired', '48h session expired', `New Set ${curLabel} · ${curFeatured.length} featured`);
+          toast('↻ Featured studies refreshed', `It has been more than 48 hours since your last visit. A fresh set (Set ${curLabel}) of ${curFeatured.length} featured studies has been selected.`, 'expired');
         }
 
       } else {
         // No prior session at all — brand new visitor
         curFeatured = pick(featPool);
+        curLabel = nextLabel(); saveLabel(curLabel);
         saveSession(curFeatured.map(s => s.id));
         if (!isFirst) {
-          pushLog('new', 'New session', `${curFeatured.length} featured selected · locked for 48h`);
-          updateSessBar('new', 'New session started', `${curFeatured.length} featured locked for 48h`);
-          toast('Featured studies selected', `${curFeatured.length} featured studies selected and locked for 48 hours.`, 'new');
+          pushLog('new', 'New session', `Set ${curLabel} · ${curFeatured.length} featured · locked for 48h`);
+          updateSessBar('new', 'New session started', `Set ${curLabel} · ${curFeatured.length} featured locked for 48h`);
+          toast('Featured studies selected', `Set ${curLabel}: ${curFeatured.length} featured studies selected and locked for 48 hours.`, 'new');
         }
       }
     } else {
@@ -1255,39 +1345,44 @@ function applyFilters() {
 
   // ── FILTERED STATE ─────────────────────────────────────────────────────────
   } else {
-    ftShown = featPool; // ALL matching featured — no cap
     if (changed) {
+      // New search context → pick up to 5 matching featured, then lock them to this context
+      curFiltered = pick(featPool);
+      curLabel = nextLabel();  // each search context is its own labelled set
+      featExpanded = false;
       ctxKey = newKey;
       if (!isFirst) {
-        pushLog('filtered', label, `${featPool.length} matching featured shown`);
-        updateSessBar('filtered', label, `${featPool.length} featured pinned`);
+        pushLog('filtered', label, `Set ${curLabel} · ${curFiltered.length} of ${featPool.length} matching featured shown`);
+        updateSessBar('filtered', label, `Set ${curLabel} · ${curFiltered.length} of ${featPool.length} featured pinned`);
       }
+    } else {
+      // Same search context (pagination / sort / re-render) → keep the same selection, no reshuffle
+      curFiltered = curFiltered.filter(s => featPool.some(f => f.id === s.id));
+      if (curFiltered.length === 0) curFiltered = pick(featPool);
     }
+    ftShown = curFiltered;
   }
 
   isFirst = false;
   updateClock();
 
   // ── WHAT TO SHOW ────────────────────────────────────────────────────────────
-  // DEFAULT state:
-  //   collapsed → show curFeatured (5 locked) + "See all X" button
-  //   expanded  → show ALL featured in pool + "Show fewer" button
-  // FILTERED state:
-  //   filter has priority → show ALL matching featured, no toggle, no cap
+  // Both DEFAULT and FILTERED states show up to 5 featured (the cap):
+  //   collapsed → show the capped selection (≤5) + "View all featured (N)" button
+  //   expanded  → show ALL featured in the pool + "Show fewer" button
+  // DEFAULT selection is locked for 48h; FILTERED selection is locked to the search context.
 
+  const baseShown = defState ? curFeatured : curFiltered; // capped ≤5 in both states
   let visibleFeatured;
   if (!featVisible) {
     // Featured hidden — show no featured studies at all
     visibleFeatured = [];
-  } else if (defState) {
-    visibleFeatured = featExpanded ? featPool : curFeatured;
   } else {
-    // filter active — show ALL featured matching the filter
-    visibleFeatured = featPool;
+    visibleFeatured = featExpanded ? featPool : baseShown;
   }
 
-  const hiddenCount = featVisible && defState && !featExpanded
-    ? Math.max(0, featPool.length - curFeatured.length) : 0;
+  const hiddenCount = featVisible && !featExpanded
+    ? Math.max(0, featPool.length - baseShown.length) : 0;
 
   // rest = all matched non-featured studies
   // when featVisible=false, featured studies drop into normal results
@@ -1303,9 +1398,22 @@ function applyFilters() {
   const af = [q?`Search:"${q}"`:null,cq?`Cond:"${cq}"`:null,types.length?`Type:${types.join(',')}`:null,stats.length?`Status:${stats.join(',')}`:null,phases.length?`Phase:${phases.join(',')}`:null,ages.length?`Age:${ages.join(',')}`:null].filter(Boolean);
   const modeTag = defState
     ? `<span style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:4px;font-weight:700">Default — ${curFeatured.length} locked for 48h</span>`
-    : `<span style="background:#faf5ff;color:#7c3aed;padding:2px 8px;border-radius:4px;font-weight:700">Filtered — all ${featPool.length} matching featured shown</span>`;
+    : `<span style="background:#faf5ff;color:#7c3aed;padding:2px 8px;border-radius:4px;font-weight:700">Filtered — ${curFiltered.length} of ${featPool.length} matching featured shown</span>`;
   const dbgEl = document.getElementById('dbg');
   if (dbgEl) dbgEl.innerHTML = `${modeTag}${af.length ? ' &nbsp;|&nbsp; ' + af.join(' · ') : ''}`;
+
+  // Active-set readout — which labelled set is on screen and exactly which study ids it holds
+  const asEl = document.getElementById('activeSet');
+  if (asEl) {
+    if (visibleFeatured.length) {
+      const shownIds = visibleFeatured.map(s => s.id).join(', ');
+      const kind = defState ? 'default · 48h lock' : 'filtered · ' + label;
+      asEl.innerHTML = `<strong>Active set ${curLabel}</strong> <span style="color:#9ca3af">(${kind})</span> — study ids [${shownIds}]`
+        + (hiddenCount > 0 ? ` <span style="color:#9ca3af">· +${hiddenCount} more in pool</span>` : '');
+    } else {
+      asEl.innerHTML = 'No featured studies shown for this context.';
+    }
+  }
   // Update toggle button appearance
   const ftBtn = document.getElementById('featToggleBtn');
   if (ftBtn) {
@@ -1322,16 +1430,17 @@ function applyFilters() {
   let rotationNotice = '';
   if (visibleFeatured.length > 0) {
     let toggleBtn = '';
-    if (defState && hiddenCount > 0) {
+    if (!featExpanded && hiddenCount > 0) {
       toggleBtn = `<button class="feat-see-all" onclick="toggleFeatured()">View all featured studies (${featPool.length})</button>`;
-    } else if (defState && featExpanded && featPool.length > curFeatured.length) {
+    } else if (featExpanded && featPool.length > baseShown.length) {
       toggleBtn = `<button class="feat-see-all" onclick="toggleFeatured()">Show fewer</button>`;
     }
     rotationNotice = `
     <div class="feat-hdr">
+      <div class="set-pill" title="Every distinct set of featured studies gets a label. ${defState ? 'This is the default 48h-locked set.' : 'This set is tied to the current search context.'}">Set ${curLabel}</div>
       <div class="feat-notice">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4C7.58 4 4 7.58 4 12S7.58 20 12 20C15.73 20 18.84 17.45 19.73 14H17.65C16.83 16.33 14.61 18 12 18C8.69 18 6 15.31 6 12S8.69 6 12 6C13.66 6 15.14 6.69 16.22 7.78L13 11H20V4L17.65 6.35Z" fill="currentColor"/></svg>
-        Featured studies are selected from our sponsor pool and rotate periodically
+        Up to 5 featured studies are chosen from our sponsor pool. You'll see the same set for up to 48 hours; it refreshes when you search or filter.
       </div>
       ${toggleBtn}
     </div>`;
@@ -1339,7 +1448,7 @@ function applyFilters() {
 
   // ── BUILD HTML ──────────────────────────────────────────────────────────────
   let html = rotationNotice;
-  visibleFeatured.forEach(s => { html += cardHTML(s, true); });
+  visibleFeatured.forEach((s, i) => { html += cardHTML(s, true, { label: curLabel, idx: i + 1 }); });
   if (visibleFeatured.length && rest.length) html += `<div class="sep">All studies</div>`;
   rest.forEach(s => { html += cardHTML(s, false); });
   if (!displayTotal) html = `<div class="empty">No studies match your filters.<br><small style="margin-top:5px;display:block;color:#9ca3af">Try broadening your search.</small></div>`;
@@ -1400,6 +1509,9 @@ applyFilters();
       <!-- Mode tag -->
       <div class="fab-dbg" id="dbg"></div>
 
+      <!-- Active set readout (which set is on screen + its study ids) -->
+      <div class="fab-dbg" id="activeSet" style="color:#6d28d9;background:#f5f3ff">Waiting for first interaction…</div>
+
       <!-- Dots -->
       <div class="fab-dots" id="dotsRow"></div>
 
@@ -1408,7 +1520,7 @@ applyFilters();
         <div class="fab-col">
           <div class="fab-col-title" style="color:#0369a1">📌 Default state</div>
           <ul>
-            <li>First visit → <strong>5 featured studies</strong> randomly selected</li>
+            <li>First visit → <strong>up to 5 featured</strong> randomly selected</li>
             <li>Saved to <code>localStorage</code> with timestamp</li>
             <li><strong>Any return within 48h</strong> → exact same selection</li>
             <li>Refresh, close tab, reopen → <strong>same studies</strong></li>
@@ -1418,26 +1530,49 @@ applyFilters();
         <div class="fab-col">
           <div class="fab-col-title" style="color:#7c3aed">🔍 Filtered state</div>
           <ul>
-            <li><strong>All eligible featured shown</strong> — no cap</li>
-            <li>8 matching "GBM" → <strong>show all 8</strong></li>
-            <li>48h session preserved in storage, untouched</li>
-            <li>Clear filters → <strong>same locked selection returns</strong></li>
+            <li><strong>Up to 5 matching featured</strong> — same cap as default</li>
+            <li>8 match "GBM" → <strong>show 5</strong> + "View all featured (8)"</li>
+            <li>Locked to the search context — <strong>no reshuffle</strong> on paging/sort</li>
+            <li>Change query or filter → <strong>new set of up to 5</strong></li>
+            <li>Clear filters → <strong>48h default selection returns</strong></li>
           </ul>
         </div>
         <div class="fab-col">
-          <div class="fab-col-title" style="color:#b45309">↻ Reset only when</div>
+          <div class="fab-col-title" style="color:#b45309">↻ Reshuffle only when</div>
           <ul>
-            <li>48h TTL elapsed — <strong>silent, on next visit</strong></li>
-            <li>No notice shown, no disruption</li>
+            <li>Search query changes</li>
+            <li>A filter changes</li>
+            <li>48h TTL elapses — <strong>silent, on next visit</strong></li>
           </ul>
-          <div class="fab-col-title" style="color:#16a34a;margin-top:8px">✓ Session survives</div>
+          <div class="fab-col-title" style="color:#16a34a;margin-top:8px">✓ Selection survives</div>
           <ul>
             <li>Page refresh · tab close · tab reopen</li>
-            <li>Filter apply · filter clear</li>
-            <li>Pagination · sort · scroll</li>
+            <li>Filter clear (back to default)</li>
+            <li>Pagination · sort · scroll · opening a card</li>
           </ul>
         </div>
       </div>
+
+      <div class="fab-dbg" style="color:#7c3aed;background:#faf5ff">
+        <strong>Per visitor, not global:</strong> each browser makes its own random pick, so
+        different users generally see different featured studies — and the same person on another
+        device/browser sees a different set. The selection is not coordinated across users, so this
+        prototype does not guarantee equal exposure per sponsor (see backend rotation ticket).
+      </div>
+
+      <div class="fab-divider"></div>
+
+      <!-- Fairness simulator -->
+      <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        ⚖ Fairness simulator
+        <span style="font-weight:500;color:#9ca3af">10 featured · show 5 each</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
+          <label style="color:#6b7280;font-weight:600">Users</label>
+          <input id="simN" class="sim-in" type="number" value="45" min="1" max="100000">
+          <button class="fab-btn-ctrl info" onclick="runFairnessSim()">Run</button>
+        </span>
+      </div>
+      <div id="simOut"><div style="font-size:10px;color:#9ca3af;font-style:italic">Run to compare <strong>random</strong> (today's client-side pick) vs <strong>balanced</strong> server-side rotation — same pool, same 5-per-user, side by side.</div></div>
 
       <div class="fab-divider"></div>
 
